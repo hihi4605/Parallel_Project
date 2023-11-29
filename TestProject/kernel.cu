@@ -1,4 +1,5 @@
-﻿#include "cuda_runtime.h"
+﻿#include "Matrix.h"
+#include "cuda_runtime.h"
 #include "device_launch_parameters.h"
 #include <iostream>
 #include <stdio.h>
@@ -8,7 +9,7 @@
 #include "Timer.hpp"
 #include <cstdlib>
 #include <string>
-
+#include "Matrix.h"
 unsigned
 getInput();
 
@@ -43,7 +44,7 @@ __global__ void matrixMultiply(int* a, int* b, int* c, int N)
 int main()
 {
     // Initialize the CUDA device
-    cudaFree(0);
+   cudaSetDevice(0); 
     printIntro();
   
  
@@ -57,7 +58,10 @@ int main()
         cudaMallocManaged(&a, num_bytes);
         cudaMallocManaged(&b, num_bytes);
         cudaMallocManaged(&c, num_bytes);
+        int R = 2;
 
+        Matrix<int> mat(R);
+       
         fillMatrix(a, N);
         fillMatrix(b, N);
 
@@ -73,7 +77,7 @@ int main()
         Timer<> t;
         // Launch Kernel with a 2D grid of (block, block)
         // with each thread block containing a 2D grid of (thread, thread)
-        matrixMultiply << < blocks_per_grid, threads_per_block >> > (a, b, c, N);
+        matrixMultiply <<< blocks_per_grid, threads_per_block >>> (a, b, c, N);
         t.stop();
         double matrix_time = t.getElapsedMs();
         printf("\nGPU Done!\n");
@@ -95,6 +99,8 @@ int main()
 
         double speedup = cpu_time / matrix_time;
         printf("\nSpeedup: %f\n", speedup);
+        
+
  
     return 0;
 }
