@@ -8,14 +8,6 @@
 #include "Timer.hpp"
 #include <cstdlib>
 #include <string>
-#include <boost/numeric/ublas/matrix.hpp>
-#include <boost/numeric/ublas/io.hpp>
-
-boost::numeric::ublas::matrix<int>
-multiplyMatrices(const boost::numeric::ublas::matrix<int>& A, const boost::numeric::ublas::matrix<int>& B);
-
-void 
-initializeMatrixRandomly(boost::numeric::ublas::matrix<int>& matrix);
 
 unsigned
 getInput();
@@ -23,128 +15,168 @@ getInput();
 void
 fillMatrix(int* m, unsigned N);
 
+unsigned
+calculateChecksum(int* matrix, unsigned N);
+
 void verify_result(int* a, int* b, int* c, int N);
+
+void
+printIntro();
 
 __global__ void matrixMultiply(int* a, int* b, int* c, int N)
 {
-    unsigned sum = 0;
+    int d_col = blockIdx.x * blockDim.x + threadIdx.x;
+    int d_row = blockIdx.y * blockDim.y + threadIdx.y;
+ 
 
-    int row = blockIdx.y * blockDim.y + threadIdx.y;
-    int col = blockIdx.x * blockDim.x + threadIdx.x;
-
-    if (row < N && col < N)
+    if (d_row < N && d_col < N)
     {
         int tmp = 0;
         for (int i = 0; i < N; i++)
         {
-            tmp += a[row * N + i] * b[i * N + col];
+            tmp += a[d_row * N + i] * b[i * N + d_col];
         }
-        c[row * N + col] = tmp;
-        sum += tmp;
+        c[d_row * N + d_col] = tmp;
     }
-
 }
 
 int main()
 {
-    while (1)
-    {
-        auto N = getInput();
-        // Initialize Matricies
+    // Initialize the CUDA device
+    cudaFree(0);
+    printIntro();
   
-        boost::numeric::ublas::matrix<int> A(N, N);
-        boost::numeric::ublas::matrix<int> B(N, N);
-        boost::numeric::ublas::matrix<int> C;
+ 
+        auto N = getInput();
 
-        initializeMatrixRandomly(A);
-        initializeMatrixRandomly(B);
-        Timer<> r;
-        C = multiplyMatrices(A, B);
-        r.stop();
-        double boost = r.getElapsedMs();
-        std::cout << "Boost Library: " << boost << "ms" << std::endl;
-        
+        // Get the number of bytes for our matrix
         size_t num_bytes = N * N * sizeof(int);
-
-        int* a, int* b, int* c;
+        // Allocate memory on the device
+        // Cuda malloc managed will ensure that memory on the device is freed at program completion
+        int* a, * b, * c;
         cudaMallocManaged(&a, num_bytes);
         cudaMallocManaged(&b, num_bytes);
         cudaMallocManaged(&c, num_bytes);
 
         fillMatrix(a, N);
         fillMatrix(b, N);
-        // Threablock 
+
+        // Allocate our threadblocks that will be used to launch our kernel
         int threads = 16;
         int blocks = (N + threads - 1) / threads;
 
-        dim3 THREADS(threads, threads);
-        dim3 BLOCKS(blocks, blocks);
-        
-        // Launch Kernal 
+        // A structure to contain our grid, block configuration for our kernel
+        dim3 threads_per_block(threads, threads, 1);
+        dim3 blocks_per_grid(blocks, blocks);
+
+        // Time GPU
         Timer<> t;
-        unsigned out = 0;
-        matrixMultiply <<< BLOCKS, THREADS >>> (a, b, c, N);
+        // Launch Kernel with a 2D grid of (block, block)
+        // with each thread block containing a 2D grid of (thread, thread)
+        matrixMultiply << < blocks_per_grid, threads_per_block >> > (a, b, c, N);
         t.stop();
-        printf("GPU Done!\n");
         double matrix_time = t.getElapsedMs();
+        printf("\nGPU Done!\n");
         printf("GPU Elapsed Time: %f ms\n", matrix_time);
-       
+
+        // Tell the CPU to wait until the GPU completes its task
         cudaDeviceSynchronize();
 
-        printf("Starting CPU\n");
+        printf("\nStarting CPU\n");
         t.start();
         verify_result(a, b, c, N);
         t.stop();
-        printf("\nDevice Matrix Sum: %d\n", out);
         double cpu_time = t.getElapsedMs();
         printf("CPU Elapsed Time: %f ms\n", cpu_time);
+
+        // Verify CPU result with checksum
+        unsigned checksumCPU = calculateChecksum(c, N);
+        printf("CPU Checksum: %u\n", checksumCPU);
+
         double speedup = cpu_time / matrix_time;
-        printf("Speedup: %f\n", speedup);
-    }
+        printf("\nSpeedup: %f\n", speedup);
+ 
+    return 0;
 }
 
-unsigned
-getInput()
+unsigned getInput()
 {
-    
     unsigned N;
-    std::cout << "Matrix Deminsions N >> ";
-    std::cin >> N;
+    std::string input;
+
+    while (true)
+    {
+        std::cout << "Enter the Order of the square matrix (N x N) or 'q' to quit: ";
+        std::cin >> input;
+
+        if (input == "q") {
+            std::cout << "Exiting the program.\n";
+            std::exit(0); // Exit the program
+        }
+
+        // Try converting input to an unsigned integer
+        try
+        {
+            N = std::stoul(input);
+            if (N > 0)
+                break; // Input is valid, exit the loop
+            else
+                std::cout << "Invalid input. Please enter a positive integer for N." << std::endl;
+        }
+        catch (const std::invalid_argument& e)
+        {
+            std::cout << "Invalid input. Please enter a positive integer for N or 'q' to quit." << std::endl;
+            std::cin.clear(); // Clear the error flag
+            std::cin.ignore(std::numeric_limits<std::streamsize>::max(), '\n'); // Discard invalid input
+        }
+        catch (const std::out_of_range& e)
+        {
+            std::cout << "Invalid input. Number out of range. Please enter a smaller value." << std::endl;
+            std::cin.clear(); // Clear the error flag
+            std::cin.ignore(std::numeric_limits<std::streamsize>::max(), '\n'); // Discard invalid input
+        }
+    }
+
     return N;
 }
 
-void
-fillMatrix(int* m, unsigned N)
-{
-    for (size_t i = 0; i < N * N; ++i)
-    {
-        m[i] = rand() % 100;
+
+void fillMatrix(int* m, unsigned N) {
+    // Use a consistent seed for reproducibility
+    static std::minstd_rand engine(0);
+
+    // Adjust the range as needed
+    std::uniform_int_distribution<int> dis(0, 4);
+
+    for (size_t i = 0; i < N * N; ++i) {
+        m[i] = dis(engine);
     }
 }
 
-void initializeMatrixRandomly(boost::numeric::ublas::matrix<int>& matrix) {
-    std::random_device rd;
-    std::mt19937 gen(rd());
-    std::uniform_real_distribution<double> dis(1.0, 10.0); // Adjust the range as needed
+void printIntro() {
+    // Get device properties
+    cudaDeviceProp prop;
+    cudaGetDeviceProperties(&prop, 0);
 
-    for (size_t i = 0; i < matrix.size1(); ++i) {
-        for (size_t j = 0; j < matrix.size2(); ++j) {
-            matrix(i, j) = dis(gen);
-        }
-    }
+    std::cout << "============================================" << std::endl;
+    std::cout << "       Matrix Multiplication Program        " << std::endl;
+    std::cout << "============================================" << std::endl;
+    std::cout << "This program performs matrix multiplication" << std::endl;
+    std::cout << "on both the CPU and GPU using CUDA. It then" << std::endl;
+    std::cout << "compares the results and calculates the" << std::endl;
+    std::cout << "speedup achieved by the GPU computation." << std::endl;
+    std::cout << "============================================" << std::endl;
+
+    // Print device properties
+    std::cout << "CUDA Device: " << prop.name << std::endl;
+    std::cout << "Compute Capability: " << prop.major << "." << prop.minor << std::endl;
+    std::cout << "Total Global Memory: " << prop.totalGlobalMem / (1024 * 1024) << " MB" << std::endl;
+    std::cout << "Number of Multi-Processors: " << prop.multiProcessorCount << std::endl;
+    std::cout << "Max Threads Per Block: " << prop.maxThreadsPerBlock << std::endl;
+    std::cout << "Warp Size: " << prop.warpSize << std::endl;
+    std::cout << "============================================" << std::endl;
 }
 
-// Function to perform matrix multiplication
-boost::numeric::ublas::matrix<int>
-multiplyMatrices(const boost::numeric::ublas::matrix<int>& A, const boost::numeric::ublas::matrix<int>& B) {
-    // Check if matrices A and B can be multiplied
-    if (A.size2() != B.size1()) {
-        throw std::invalid_argument("Incompatible matrix dimensions for multiplication");
-    }
-
-    // Perform matrix multiplication and return the result
-    return boost::numeric::ublas::prod(A, B);
-}
 
 void verify_result(int* a, int* b, int* c, int N) {
     unsigned global_sum = 0;
@@ -165,6 +197,14 @@ void verify_result(int* a, int* b, int* c, int N) {
         }
     }
     printf("CPU Done!\n");
-    std::cout << "Matrix Sum: " << global_sum;
+    printf("Matrix Sum: %u\n", global_sum);
 
+}
+
+unsigned calculateChecksum(int* matrix, unsigned N) {
+    unsigned checksum = 0;
+    for (size_t i = 0; i < N * N; ++i) {
+        checksum += matrix[i];
+    }
+    return checksum;
 }
