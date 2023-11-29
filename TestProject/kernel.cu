@@ -8,7 +8,7 @@
 #include "Timer.hpp"
 #include <cstdlib>
 #include <string>
-
+#include "Matrix.h"
 unsigned
 getInput();
 
@@ -25,6 +25,7 @@ printIntro();
 
 __global__ void matrixMultiply(int* a, int* b, int* c, int N)
 {
+ 
     int d_col = blockIdx.x * blockDim.x + threadIdx.x;
     int d_row = blockIdx.y * blockDim.y + threadIdx.y;
  
@@ -37,7 +38,10 @@ __global__ void matrixMultiply(int* a, int* b, int* c, int N)
             tmp += a[d_row * N + i] * b[i * N + d_col];
         }
         c[d_row * N + d_col] = tmp;
+ 
     }
+
+  
 }
 
 int main()
