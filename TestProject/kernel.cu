@@ -48,6 +48,12 @@ int main()
 {
     // Initialize the CUDA device
     cudaFree(0);
+    cudaFree(0);
+    cudaFree(0);
+    cudaFree(0);
+    cudaFree(0);
+    cudaFree(0);
+
     printIntro();
   
  
