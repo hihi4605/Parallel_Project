@@ -65,7 +65,9 @@
     <CudaCompile>
       <TargetMachinePlatform>64</TargetMachinePlatform>
       <Include>C:\Program Files\boost_1_83_0;%(Include)</Include>
+      <AdditionalOptions>--std=c++20 %(AdditionalOptions)</AdditionalOptions>
     </CudaCompile>
+    <CudaLink />
   </ItemDefinitionGroup>
   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Release|x64'">
     <ClCompile>
@@ -87,7 +89,9 @@
     <CudaCompile>
       <TargetMachinePlatform>64</TargetMachinePlatform>
       <Include>C:\Program Files\boost_1_83_0;%(Include)</Include>
+      <AdditionalOptions>--std=c++20 %(AdditionalOptions)</AdditionalOptions>
     </CudaCompile>
+    <CudaLink />
   </ItemDefinitionGroup>
   <ItemGroup>
     <CudaCompile Include="kernel.cu" />
@@ -96,6 +100,7 @@
     <Text Include="CMakeLists.txt" />
   </ItemGroup>
   <ItemGroup>
+    <ClInclude Include="Matrix.hpp" />
     <ClInclude Include="Timer.hpp" />
   </ItemGroup>
   <ItemGroup>
