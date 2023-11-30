@@ -1,12 +1,3 @@
-/*
-  Filename   : Matrix.hpp
-  Author     : Christian Michel
-  Course     : CSCI 476
-  Date       : 9/14/2023
-  Assignment :
-  Description: Class for representing square matrices of order
-               N (i.e., N x N).
-*/
 
 /************************************************************/
 // Prevent multiple inclusion
@@ -19,7 +10,7 @@
 #include <new>
 #include <algorithm>
 #include <memory>
-#include <ranges>
+
 /************************************************************/
 
 template<typename T>
@@ -37,10 +28,14 @@ public:
     /**********************************************************/
 
     // Initialize a square matrix of order 'order'.
-    Matrix(unsigned order)
-        : m_data(new (CACHE_LINE_BYTES) T[order * order]), m_order(order)
-    {
-    }
+Matrix(unsigned order)
+    : m_order(order)
+    , m_data(reinterpret_cast<T*>(new alignas(64) unsigned char[order * order * sizeof(T)]))
+{
+    // Note: You may need to adjust the alignment depending on your platform's requirements
+    // and the alignment constraints of your data type T.
+}
+
 
     /**********************************************************/
 
@@ -49,9 +44,14 @@ public:
     Matrix(Matrix const& m)
         : Matrix(m.order())
     {
-
-        std::copy(m.begin(), m.end(), this->begin());
-
+        auto j = m.begin();
+        auto i = begin();
+        while (i != end())
+        {
+            *i = *j;
+            ++i;
+            ++j;
+        }
     }
 
     /**********************************************************/
@@ -71,20 +71,24 @@ public:
     Matrix&
         operator= (Matrix const& m)
     {
-
-        if (this != &m) {
-            std::copy(m.begin(), m.end(), m_data);
+        if (this == &m)
+        {
+            return *this;
+        }
+        this = Matrix(m.order());
+        for (size_t i = 0; i < order(); ++i)
+        {
+            for (size_t j = 0; j < order(); ++j)
+                this(i, j) == m(i, j);
         }
         return *this;
     }
-
 
     /**********************************************************/
 
     // Move assignment. Default is fine.
     Matrix&
         operator= (Matrix&&) = default;
-
 
     /**********************************************************/
 
@@ -93,8 +97,7 @@ public:
     T&
         operator () (unsigned row, unsigned col)
     {
-
-        return *(begin() + ((row * order()) + col));
+        return m_data.get()[row * order() + col];
     }
 
     /**********************************************************/
@@ -104,9 +107,7 @@ public:
     T const&
         operator () (unsigned row, unsigned col) const
     {
-        // TODO
-        //Row * Order + Colkk
-        return *(begin() + ((row * order()) + col));
+        return m_data.get()[row * order() + col];
     }
 
     /**********************************************************/
@@ -124,7 +125,7 @@ public:
     iterator
         begin()
     {
-        return (m_data.get());
+        return m_data.get();
     }
 
     /**********************************************************/
@@ -133,8 +134,7 @@ public:
     const_iterator
         begin() const
     {
-
-        return  (m_data.get());
+        return m_data.get();
     }
 
     /**********************************************************/
@@ -143,8 +143,7 @@ public:
     iterator
         end()
     {
-
-        return begin() + (order() * order());
+        return begin() + ((order() * order()));
     }
 
     /**********************************************************/
@@ -153,9 +152,8 @@ public:
     const_iterator
         end() const
     {
-        return  begin() + (order() * order());
+        return begin() + (order() * order());
     }
-
 
     /**********************************************************/
 
@@ -170,5 +168,3 @@ private:
     std::unique_ptr<T, decltype (Deleter)> m_data;
     unsigned m_order;
 };
-
-/************************************************************/

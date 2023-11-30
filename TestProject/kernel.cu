@@ -1,23 +1,14 @@
-﻿#include "Matrix.h"
+﻿ 
+#include "Matrix.hpp"
 #include "cuda_runtime.h"
 #include "device_launch_parameters.h"
 #include <iostream>
-#include <stdio.h>
 #include <random>
 #include <vector>
 #include <assert.h>
 #include "Timer.hpp"
 #include <cstdlib>
 #include <string>
-#include "Matrix.h"
-
-template<typename T>
-void
-output(double time, Matrix<T> C);
-
-template<typename T>
-void
-multiplyKij(Matrix<T>& C, Matrix<T> const& A, Matrix<T> const& B);
 
 unsigned
 getInput();
@@ -26,178 +17,239 @@ void
 cudaFillMatrix(int* m, unsigned N);
 
 void
-fillMatrices(Matrix<int>& C, Matrix<int>& A, Matrix<int>& B);
-
-unsigned
-calculateChecksum(int* matrix, unsigned N);
-
-void 
-verify_result(int* a, int* b, int* c, int N);
+assert_correctness(int* a, int* b, int* c, int N);
 
 void
 printIntro();
+
+void
+KIJMatMul(std::vector< std::vector<int>> A, std::vector< std::vector<int>> B, unsigned N);
+
+void
+fillCPU(std::vector< std::vector<int>>& A, unsigned N);
+
 
 __global__ void matrixMultiply(int* a, int* b, int* c, int N)
 {
     int d_col = blockIdx.x * blockDim.x + threadIdx.x;
     int d_row = blockIdx.y * blockDim.y + threadIdx.y;
- 
 
+    // This will ensure we dont access threads outside our matrix dimension
     if (d_row < N && d_col < N)
     {
-        int tmp = 0;
+        unsigned prod = 0;
         for (int i = 0; i < N; i++)
         {
-            tmp += a[d_row * N + i] * b[i * N + d_col];
+            prod += a[d_row * N + i] * b[i * N + d_col];
         }
-        c[d_row * N + d_col] = tmp;
+        c[d_row * N + d_col] = prod;
     }
+}
+
+__global__ void warmupCall()
+{
+
 }
 
 int main()
 {
-    // Initialize the CUDA device so our initial timings are consistent
-        cudaSetDevice(0); 
-        printIntro();
-  
- 
-        auto N = getInput();
+    // Initialize the CUDA Runtime with a kernal call 
+    // else our initial CUDA calls will be very slow
+    cudaSetDevice(0);
+    printIntro();
+    warmupCall << < 1, 1 >> > ();
 
-        // Get the number of bytes for our matrix
-        size_t num_bytes = N * N * sizeof(int);
-        // Allocate memory on the device
-        // Cuda malloc managed will ensure that memory on the device is freed at program completion
-        int* a, * b, * c;
-        cudaMallocManaged(&a, num_bytes);
-        cudaMallocManaged(&b, num_bytes);
-        cudaMallocManaged(&c, num_bytes);
-       
+    auto N = getInput();
 
-        Matrix<int> my_matA(N);
-        Matrix<int> my_matB(N);
-        Matrix<int> my_matC(N);
+    // Get the number of bytes for our matrix
+    size_t num_bytes = N * N * sizeof(int);
+    // Allocate memory on the device
 
-        fillMatrices(my_matA, my_matB, my_matC);
+    int* a, * b, * c;
+    cudaMallocManaged(&a, num_bytes);
+    cudaMallocManaged(&b, num_bytes);
+    cudaMallocManaged(&c, num_bytes);
 
-        Timer<> r;
-        multiplyKij(my_matC, my_matA, my_matB);
-        r.stop();
-        output(r.getElapsedMs(), my_matC);
+    cudaFillMatrix(a, N);
+    cudaFillMatrix(b, N);
 
-        cudaFillMatrix(a, N);
-        cudaFillMatrix(b, N);
 
-        // Allocate our threadblocks that will be used to launch our kernel
-        int threads = 16;
-        int blocks = (N + threads - 1) / threads;
 
-        // A structure to contain our grid, block configuration for our kernel
-        dim3 threads_per_block(threads, threads, 1);
-        dim3 blocks_per_grid(blocks, blocks);
+    // Allocate our threadblocks that will be used to launch our kernel
+    int threads = 32;
+    int blocks = (ceil)(N + threads - 1 / threads);
+    // Launch Kernel with a 2D grid of (block, block)
+    // with each thread block containing a 2D grid of 1024 threads
+    // Dim3 stores memory layout for a kernel launch
+    dim3 threads_per_block(threads, threads);
+    dim3 blocks_per_grid(blocks, blocks);
 
-        // Time GPU
-        Timer<> t;
-        // Launch Kernel with a 2D grid of (block, block)
-        // with each thread block containing a 2D grid of (thread, thread)
-        matrixMultiply <<< blocks_per_grid, threads_per_block >>> (a, b, c, N);
-        t.stop();
-        double matrix_time = t.getElapsedMs();
-        printf("\nGPU Done!\n");
-        printf("GPU Elapsed Time: %f ms\n", matrix_time);
+    // Time GPU using cudaEvent
+    cudaEvent_t start, stop;
+    cudaEventCreate(&start);
+    cudaEventCreate(&stop);
+    cudaEventRecord(start);
 
-        // Tell the CPU to wait until the GPU completes its task
-        cudaDeviceSynchronize();
+    matrixMultiply << < blocks_per_grid, threads_per_block >> > (a, b, c, N);
 
-        printf("\nStarting CPU\n");
-        t.start();
-        verify_result(a, b, c, N);
-        t.stop();
-        double cpu_time = t.getElapsedMs();
-        printf("CPU Elapsed Time: %f ms\n", cpu_time);
+    cudaEventRecord(stop);
+    cudaEventSynchronize(stop);
+    float milliseconds = 0;
+    cudaEventElapsedTime(&milliseconds, start, stop);
 
-        // Verify CPU result with checksum
-        unsigned checksumCPU = calculateChecksum(c, N);
-        printf("CPU Checksum: %u\n", checksumCPU);
+    printf("\nGPU Done!\n");
+    printf("GPU Elapsed Time: %f ms\n", milliseconds);
 
-        double speedup = cpu_time / matrix_time;
-        printf("\nSpeedup: %f\n", speedup);
-        
+    // Tell the CPU to wait until the GPU completes its task
+    cudaDeviceSynchronize();
+    printf("\nStarting IJK\n");
 
- 
+    std::vector<std::vector<int>> A(N, std::vector<int>(N));
+    std::vector<std::vector<int>> B(N, std::vector<int>(N));
+
+    fillCPU(A, N);
+    fillCPU(B, N);
+
+    for (const auto& row : A) {
+        for (int element : row) {
+            std::cout << element << " ";
+        }
+        std::cout << "\n";
+    }
+    std::cout << "\n\n\n\"";
+    for (const auto& row : B) {
+        for (int element : row) {
+            std::cout << element << " ";
+        }
+        std::cout << "\n";
+    }
+
+    KIJMatMul(A, B, N);
+
+
+
+    printf("\nStarting CPU\n");
+    Timer t;
+    assert_correctness(a, b, c, N);
+    t.stop();
+
+    printf("CPU Done!\n");
+    double cpu_time = t.getElapsedMs();
+    printf("CPU Elapsed Time: %f ms\n", cpu_time);
+
+    double speedup = cpu_time / milliseconds;
+    printf("\nSpeedup: %f\n", speedup);
+
+
+
     return 0;
 }
 
-//populates matrices A and B with random numbers and C with 0s
+
+
+
+
 void
-fillMatrices(Matrix<int>& C, Matrix<int>& A, Matrix<int>& B)
+KIJMatMul(std::vector< std::vector<int>> A, std::vector< std::vector<int>> B, unsigned N)
 {
-    //populates randomly
-    static std::minstd_rand r(0);
-    std::uniform_int_distribution<int> dist(0, 4);
-    std::generate_n(A.begin(), A.order() * A.order(),[&]() { return dist(r); });
-    std::generate_n(B.begin(), B.order() * B.order(), [&]() { return dist(r); });
-    //populates with 0
-    for (int i = 0; i < C.order(); ++i)
-        for (int j = 0; j < C.order(); ++j)
-        {
-            C(i, j) = 0;
-        }
-}
-
-unsigned getInput()
-{
-    unsigned N;
-    std::string input;
-
-    while (true)
-    {
-        std::cout << "Enter the Order of the square matrix (N x N) or 'q' to quit: ";
-        std::cin >> input;
-
-        if (input == "q") {
-            std::cout << "Exiting the program.\n";
-            std::exit(0); // Exit the program
-        }
-
-        // Try converting input to an unsigned integer
-        try
-        {
-            N = std::stoul(input);
-            if (N > 0)
-                break; // Input is valid, exit the loop
-            else
-                std::cout << "Invalid input. Please enter a positive integer for N." << std::endl;
-        }
-        catch (const std::invalid_argument& e)
-        {
-            std::cout << "Invalid input. Please enter a positive integer for N or 'q' to quit." << std::endl;
-            std::cin.clear(); // Clear the error flag
-            std::cin.ignore(std::numeric_limits<std::streamsize>::max(), '\n'); // Discard invalid input
-        }
-        catch (const std::out_of_range& e)
-        {
-            std::cout << "Invalid input. Number out of range. Please enter a smaller value." << std::endl;
-            std::cin.clear(); // Clear the error flag
-            std::cin.ignore(std::numeric_limits<std::streamsize>::max(), '\n'); // Discard invalid input
+    std::vector< std::vector<int>> result(N, std::vector<int>(N, 0));
+    for (int k = 0; k < N; k++) {
+        for (int i = 0; i < N; i++) {
+            for (int j = 0; j < N; j++) {
+                result[i][j] += A[i][k] * B[k][j];
+            }
         }
     }
-
-    return N;
+    std::cout << "\n\n\n";
+    for (const auto& row : result) {
+        for (int element : row) {
+            std::cout << element << " ";
+        }
+        std::cout << "\n";
+    }
 }
 
 
+/**
+ * @brief Fills our matrix with random integers.
+ *
+ * @param m A pointer to the begining of the matrix you
+ * are filling.
+ * @param N The order of the matrix.
+ */
 void cudaFillMatrix(int* m, unsigned N) {
     // Use a consistent seed for reproducibility
     static std::minstd_rand engine(0);
 
-    // Adjust the range as needed
-    std::uniform_int_distribution<int> dis(0, 4);
+    static  std::uniform_int_distribution<int> dis(0, 4);
 
     for (size_t i = 0; i < N * N; ++i) {
         m[i] = dis(engine);
     }
 }
 
+
+
+/**
+ * @brief Compares the result of our matrix row,col computation
+ * against the cpu to test if the correct computation is done.
+ * If not causes an assert failure.
+ *
+ * @param a Matrix A
+ * @param b Matrix B
+ * @param c Output matrix C
+ * @param N The order of the matricies
+ */
+void assert_correctness(int* a, int* b, int* c, int N) {
+    for (int i = 0; i < N; i++) {
+
+        for (int j = 0; j < N; j++) {
+
+            int tmp = 0;
+            for (int k = 0; k < N; k++) {
+
+                tmp += a[i * N + k] * b[k * N + j];
+            }
+            // Check against the CPU result
+            assert(tmp == c[i * N + j]);
+
+        }
+    }
+
+
+
+}
+
+/**
+ * @brief Generates consistent random numbers for our CPU matrix.
+ *
+ * @param A The matrix we want to fill
+ * @param N The order of the matrix
+ */
+void
+fillCPU(std::vector< std::vector<int>>& A, unsigned N)
+{
+    // Use a consistent seed for reproducibility
+    static std::minstd_rand engine(0);
+
+    static  std::uniform_int_distribution<int> dis(0, 4);
+
+    auto lambda = [&]() {
+        static std::uniform_int_distribution<int> dis(0, 4);
+        return dis(engine);
+        };
+
+    std::generate_n(A.begin(), N, [&]() {
+        std::generate_n(A.back().begin(), N, lambda);
+        return A.back();
+        });
+
+}
+
+/**
+ * @brief Prints an intro as well as the device properties of the system.
+ *
+ */
 void printIntro() {
     // Get device properties
     cudaDeviceProp prop;
@@ -212,79 +264,48 @@ void printIntro() {
     std::cout << "speedup achieved by the GPU computation." << std::endl;
     std::cout << "============================================" << std::endl;
 
-    // Print device properties
+
     std::cout << "CUDA Device: " << prop.name << std::endl;
     std::cout << "Compute Capability: " << prop.major << "." << prop.minor << std::endl;
     std::cout << "Total Global Memory: " << prop.totalGlobalMem / (1024 * 1024) << " MB" << std::endl;
     std::cout << "Number of Multi-Processors: " << prop.multiProcessorCount << std::endl;
     std::cout << "Max Threads Per Block: " << prop.maxThreadsPerBlock << std::endl;
-    std::cout << "Warp Size: " << prop.warpSize << std::endl;
     std::cout << "============================================" << std::endl;
 }
 
 
-void verify_result(int* a, int* b, int* c, int N) {
-    unsigned global_sum = 0;
-    // For every row...
-    for (int i = 0; i < N; i++) {
-        // For every column...
-        for (int j = 0; j < N; j++) {
-            // For every element in the row-column pair
-            int tmp = 0;
-            for (int k = 0; k < N; k++) {
-                // Accumulate the partial results
-                tmp += a[i * N + k] * b[k * N + j];
-                global_sum += tmp;
-            }
-
-            // Check against the CPU result
-            assert(tmp == c[i * N + j]);
-        }
-    }
-    printf("CPU Done!\n");
-    printf("Matrix Sum: %u\n", global_sum);
-
-}
-
-unsigned calculateChecksum(int* matrix, unsigned N) {
-    unsigned checksum = 0;
-    for (size_t i = 0; i < N * N; ++i) {
-        checksum += matrix[i];
-    }
-    return checksum;
-}
-
-// KIJ Matrix Multiplication
-template<typename T>
-void
-multiplyKij(Matrix<T>& C, Matrix<T> const& A, Matrix<T> const& B)
+/**
+ * @brief Get user input or quit the program.
+ *
+ * @return unsigned An unsigned order for the matrix.
+ */
+unsigned getInput()
 {
-    T r;
-    size_t i, k, j;
-    for (k = 0; k < C.order(); k++)
+    unsigned N;
+    std::string input;
+
+    while (true)
     {
-        for (i = 0; i < C.order(); i++)
+        std::cout << "Enter the Order of the square matrix (N x N) or 'q' to quit: ";
+        std::cin >> input;
+
+        if (input == "q") {
+            std::cout << "Exiting the program.\n";
+            std::exit(0);
+        }
+
+
+        else
         {
-            r = A(i, k);
-            for (j = 0; j < C.order(); j++)
-                C(i, j) += r * B(k, j);
+            N = std::stoul(input);
+            if (N > 0)
+            {
+                break;
+            }
+            else
+                std::cout << "Invalid input. Please enter a positive integer for N." << std::endl;
         }
     }
-}
 
-template<typename T>
-void
-output(double time, Matrix<T> C)
-{
-    T sum = 0;
-    auto i = C.begin();
-    int i1 = 0;
-    while (i != C.end() && i1 < 10000)
-    {
-        sum += *i;
-        ++i;
-        ++i1;
-    }
-    std::cout << std::format("Sum:  {:d}", sum);
-    std::cout << std::format("\nTime: {:.2f} ms\n", time);
+    return N;
 }
