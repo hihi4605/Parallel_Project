@@ -10,16 +10,29 @@
 #include <cstdlib>
 #include <string>
 #include "Matrix.h"
+
+template<typename T>
+void
+output(double time, Matrix<T> C);
+
+template<typename T>
+void
+multiplyKij(Matrix<T>& C, Matrix<T> const& A, Matrix<T> const& B);
+
 unsigned
 getInput();
 
 void
-fillMatrix(int* m, unsigned N);
+cudaFillMatrix(int* m, unsigned N);
+
+void
+fillMatrices(Matrix<int>& C, Matrix<int>& A, Matrix<int>& B);
 
 unsigned
 calculateChecksum(int* matrix, unsigned N);
 
-void verify_result(int* a, int* b, int* c, int N);
+void 
+verify_result(int* a, int* b, int* c, int N);
 
 void
 printIntro();
@@ -43,9 +56,9 @@ __global__ void matrixMultiply(int* a, int* b, int* c, int N)
 
 int main()
 {
-    // Initialize the CUDA device
-   cudaSetDevice(0); 
-    printIntro();
+    // Initialize the CUDA device so our initial timings are consistent
+        cudaSetDevice(0); 
+        printIntro();
   
  
         auto N = getInput();
@@ -58,12 +71,21 @@ int main()
         cudaMallocManaged(&a, num_bytes);
         cudaMallocManaged(&b, num_bytes);
         cudaMallocManaged(&c, num_bytes);
-        int R = 2;
-
-        Matrix<int> mat(R);
        
-        fillMatrix(a, N);
-        fillMatrix(b, N);
+
+        Matrix<int> my_matA(N);
+        Matrix<int> my_matB(N);
+        Matrix<int> my_matC(N);
+
+        fillMatrices(my_matA, my_matB, my_matC);
+
+        Timer<> r;
+        multiplyKij(my_matC, my_matA, my_matB);
+        r.stop();
+        output(r.getElapsedMs(), my_matC);
+
+        cudaFillMatrix(a, N);
+        cudaFillMatrix(b, N);
 
         // Allocate our threadblocks that will be used to launch our kernel
         int threads = 16;
@@ -103,6 +125,23 @@ int main()
 
  
     return 0;
+}
+
+//populates matrices A and B with random numbers and C with 0s
+void
+fillMatrices(Matrix<int>& C, Matrix<int>& A, Matrix<int>& B)
+{
+    //populates randomly
+    static std::minstd_rand r(0);
+    std::uniform_int_distribution<int> dist(0, 4);
+    std::generate_n(A.begin(), A.order() * A.order(),[&]() { return dist(r); });
+    std::generate_n(B.begin(), B.order() * B.order(), [&]() { return dist(r); });
+    //populates with 0
+    for (int i = 0; i < C.order(); ++i)
+        for (int j = 0; j < C.order(); ++j)
+        {
+            C(i, j) = 0;
+        }
 }
 
 unsigned getInput()
@@ -147,7 +186,7 @@ unsigned getInput()
 }
 
 
-void fillMatrix(int* m, unsigned N) {
+void cudaFillMatrix(int* m, unsigned N) {
     // Use a consistent seed for reproducibility
     static std::minstd_rand engine(0);
 
@@ -213,4 +252,39 @@ unsigned calculateChecksum(int* matrix, unsigned N) {
         checksum += matrix[i];
     }
     return checksum;
+}
+
+// KIJ Matrix Multiplication
+template<typename T>
+void
+multiplyKij(Matrix<T>& C, Matrix<T> const& A, Matrix<T> const& B)
+{
+    T r;
+    size_t i, k, j;
+    for (k = 0; k < C.order(); k++)
+    {
+        for (i = 0; i < C.order(); i++)
+        {
+            r = A(i, k);
+            for (j = 0; j < C.order(); j++)
+                C(i, j) += r * B(k, j);
+        }
+    }
+}
+
+template<typename T>
+void
+output(double time, Matrix<T> C)
+{
+    T sum = 0;
+    auto i = C.begin();
+    int i1 = 0;
+    while (i != C.end() && i1 < 10000)
+    {
+        sum += *i;
+        ++i;
+        ++i1;
+    }
+    std::cout << std::format("Sum:  {:d}", sum);
+    std::cout << std::format("\nTime: {:.2f} ms\n", time);
 }
